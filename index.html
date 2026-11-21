@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#8bdcff">
+  <title>Gulel vs Babool</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      overscroll-behavior: none;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #17364b;
+    }
+
+    body {
+      background: #8bdcff;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    #game {
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+
+    .hud {
+      position: fixed;
+      z-index: 2;
+      top: max(12px, env(safe-area-inset-top));
+      left: 0;
+      width: 100%;
+      padding: 0 14px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      pointer-events: none;
+    }
+
+    .title-card, .score-card {
+      border: 2px solid rgba(255,255,255,.85);
+      border-radius: 16px;
+      background: rgba(255,255,255,.83);
+      box-shadow: 0 4px 14px rgba(34, 91, 112, .13);
+      padding: 8px 13px;
+    }
+
+    .title-card strong {
+      display: block;
+      font-size: clamp(16px, 4vw, 22px);
+      line-height: 1.15;
+    }
+
+    .title-card span {
+      display: block;
+      margin-top: 3px;
+      color: #527183;
+      font-size: 11px;
+    }
+
+    .score-card {
+      min-width: 88px;
+      text-align: center;
+      font-weight: 800;
+      font-size: 15px;
+    }
+
+    #score {
+      color: #e27522;
+      font-size: 20px;
+    }
+
+    .hint {
+      position: fixed;
+      z-index: 2;
+      left: 50%;
+      bottom: max(14px, env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      width: max-content;
+      max-width: calc(100% - 28px);
+      text-align: center;
+      padding: 8px 13px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.82);
+      color: #375d70;
+      font-size: 13px;
+      font-weight: 650;
+      pointer-events: none;
+    }
+
+    .finish {
+      position: fixed;
+      z-index: 3;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 20px;
+      background: rgba(23, 54, 75, .28);
+    }
+
+    .finish.show { display: grid; }
+
+    .finish-card {
+      width: min(330px, 100%);
+      padding: 25px 22px;
+      text-align: center;
+      border: 3px solid white;
+      border-radius: 24px;
+      background: #fffdf5;
+      box-shadow: 0 12px 36px rgba(22, 57, 74, .22);
+    }
+
+    .finish-card h2 {
+      margin: 0 0 8px;
+      font-size: 27px;
+    }
+
+    .finish-card p {
+      margin: 0 0 18px;
+      color: #597282;
+    }
+
+    button {
+      border: 0;
+      border-radius: 14px;
+      padding: 12px 22px;
+      background: #f28a36;
+      color: white;
+      font: inherit;
+      font-weight: 800;
+      font-size: 16px;
+      box-shadow: 0 4px 0 #cb6727;
+      cursor: pointer;
+    }
+
+    button:active {
+      transform: translateY(2px);
+      box-shadow: 0 2px 0 #cb6727;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" aria-label="Gulel vs Babool slingshot game"></canvas>
+
+  <div class="hud">
+    <div class="title-card">
+      <strong>🪨 Gulel vs Babool</strong>
+      <span>Pull back, aim, and let go!</span>
+    </div>
+    <div class="score-card">SCORE<br><span id="score">0</span></div>
+  </div>
+
+  <div class="hint" id="hint">Drag the stone back to aim</div>
+
+  <div class="finish" id="finish">
+    <div class="finish-card">
+      <h2>Level cleared! 🌟</h2>
+      <p>You knocked down every Babool.<br>Final score: <strong id="finalScore">0</strong></p>
+      <button id="restart">Play again</button>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById("game");
+      const ctx = canvas.getContext("2d");
+      const scoreEl = document.getElementById("score");
+      const hintEl = document.getElementById("hint");
+      const finishEl = document.getElementById("finish");
+      const finalScoreEl = document.getElementById("finalScore");
+      const restartBtn = document.getElementById("restart");
+
+      let w = 0, h = 0, dpr = 1;
+      let groundY = 0, anchor = { x: 0, y: 0 };
+      let targets = [];
+      let score = 0;
+      let dragging = false;
+      let pointerId = null;
+      let dragPos = { x: 0, y: 0 };
+      let projectile = null;
+      let particles = [];
+      let finished = false;
+      let lastTime = 0;
+      let clouds = [];
+
+      const stoneRadius = 12;
+      const maxPull = 82;
+      const launchFactor = 7.1;
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        w = rect.width;
+        h = rect.height;
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        groundY = h * 0.84;
+        anchor = { x: w * 0.24, y: groundY - 43 };
+
+        clouds = [
+          { x: w * .16, y: h * .22, s: .8 },
+          { x: w * .66, y: h * .16, s: 1.05 },
+          { x: w * .90, y: h * .31, s: .65 }
+        ];
+
+        if (projectile && projectile.state === "ready") {
+          projectile.x = anchor.x;
+          projectile.y = anchor.y;
+        }
+
+        if (!targets.length || finished) return;
+        layoutTargets();
+      }
+
+      function layoutTargets() {
+        const count = 5;
+        targets = [];
+        for (let i = 0; i < count; i++) {
+          const x = w * (0.50 + i * 0.105);
+          const baseY = groundY - (i % 2 === 0 ? 9 : 0);
+          targets.push({
+            x: Math.min(x, w - 35),
+            y: baseY,
+            r: Math.max(19, Math.min(25, w * .055)),
+            alive: true,
+            wobble: Math.random() * Math.PI * 2
+          });
+        }
+      }
+
+      function resetGame() {
+        score = 0;
+        scoreEl.textContent = score;
+        projectile = { x: anchor.x, y: anchor.y, vx: 0, vy: 0, state: "ready" };
+        particles = [];
+        dragging = false;
+        finished = false;
+        finishEl.classList.remove("show");
+        hintEl.textContent = "Drag the stone back to aim";
+        layoutTargets();
+      }
+
+      function clampPull(x, y) {
+        const dx = x - anchor.x;
+        const dy = y - anchor.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance > maxPull) {
+          return {
+            x: anchor.x + dx / distance * maxPull,
+            y: anchor.y + dy / distance * maxPull
+          };
+        }
+        return { x, y };
+      }
+
+      function pointerPosition(event) {
+        const rect = canvas.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      }
+
+      canvas.addEventListener("pointerdown", (event) => {
+        if (finished || !projectile || projectile.state !== "ready") return;
+        const p = pointerPosition(event);
+        if (Math.hypot(p.x - projectile.x, p.y - projectile.y) < 48) {
+          dragging = true;
+          pointerId = event.pointerId;
+          canvas.setPointerCapture(pointerId);
+          dragPos = clampPull(p.x, p.y);
+          event.preventDefault();
+        }
+      });
+
+      canvas.addEventListener("pointermove", (event) => {
+        if (!dragging || event.pointerId !== pointerId) return;
+        const p = pointerPosition(event);
+        dragPos = clampPull(p.x, p.y);
+        projectile.x = dragPos.x;
+        projectile.y = dragPos.y;
+        event.preventDefault();
+      });
+
+      function releaseShot(event) {
+        if (!dragging || (event && event.pointerId !== pointerId)) return;
+        dragging = false;
+        pointerId = null;
+
+        const dx = anchor.x - projectile.x;
+        const dy = anchor.y - projectile.y;
+        if (Math.hypot(dx, dy) < 8) {
+          projectile.x = anchor.x;
+          projectile.y = anchor.y;
+          return;
+        }
+
+        projectile.vx = dx * launchFactor;
+        projectile.vy = dy * launchFactor;
+        projectile.state = "flying";
+        hintEl.textContent = "Nice shot!";
+      }
+
+      canvas.addEventListener("pointerup", releaseShot);
+      canvas.addEventListener("pointercancel", releaseShot);
+      restartBtn.addEventListener("click", resetGame);
+      window.addEventListener("resize", resize);
+
+      function roundedRect(x, y, width, height, radius) {
+        ctx.beginPath();
+        ctx.roundRect(x, y, width, height, radius);
+      }
+
+      function drawBackground(time) {
+        const sky = ctx.createLinearGradient(0, 0, 0, h);
+        sky.addColorStop(0, "#75d2ff");
+        sky.addColorStop(.72, "#d5f5ff");
+        sky.addColorStop(1, "#f5f5d2");
+        ctx.fillStyle = sky;
+        ctx.fillRect(0, 0, w, h);
+
+        // Sun
+        ctx.fillStyle = "rgba(255, 224, 105, .95)";
+        ctx.beginPath();
+        ctx.arc(w * .82, h * .16, Math.min(w, h) * .055, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Soft clouds
+        for (const cloud of clouds) {
+          const drift = (time * .008) % (w + 130);
+          let x = (cloud.x + drift) % (w + 120) - 60;
+          const y = cloud.y;
+          const s = cloud.s;
+          ctx.fillStyle = "rgba(255,255,255,.78)";
+          ctx.beginPath();
+          ctx.ellipse(x, y, 29*s, 12*s, 0, 0, Math.PI*2);
+          ctx.ellipse(x-17*s, y+2*s, 17*s, 10*s, 0, 0, Math.PI*2);
+          ctx.ellipse(x+16*s, y+1*s, 19*s, 12*s, 0, 0, Math.PI*2);
+          ctx.fill();
+        }
+
+        // Distant green hills
+        ctx.fillStyle = "#a9df8b";
+        ctx.beginPath();
+        ctx.moveTo(0, groundY);
+        ctx.quadraticCurveTo(w * .2, groundY - 72, w * .43, groundY);
+        ctx.quadraticCurveTo(w * .72, groundY - 90, w, groundY - 4);
+        ctx.lineTo(w, h);
+        ctx.lineTo(0, h);
+        ctx.fill();
+
+        // Ground
+        const ground = ctx.createLinearGradient(0, groundY - 3, 0, h);
+        ground.addColorStop(0, "#73c95d");
+        ground.addColorStop(1, "#43a64c");
+        ctx.fillStyle = ground;
+        ctx.fillRect(0, groundY, w, h - groundY);
+
+        ctx.fillStyle = "#4da94e";
+        ctx.fillRect(0, groundY, w, 5);
+      }
+
+      function drawSlingshot() {
+        const x = anchor.x, y = anchor.y;
+
+        // Wooden fork
+        ctx.lineCap = "round";
+        ctx.strokeStyle = "#80512e";
+        ctx.lineWidth = 13;
+        ctx.beginPath();
+        ctx.moveTo(x, groundY + 2);
+        ctx.lineTo(x, y + 9);
+        ctx.lineTo(x - 21, y - 19);
+        ctx.moveTo(x, y + 9);
+        ctx.lineTo(x + 21, y - 19);
+        ctx.stroke();
+
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = "#b77a43";
+        ctx.beginPath();
+        ctx.moveTo(x - 2, groundY - 2);
+        ctx.lineTo(x - 2, y + 9);
+        ctx.stroke();
+
+        const stone = projectile && projectile.state === "ready"
+          ? { x: projectile.x, y: projectile.y }
+          : { x, y };
+
+        // Elastic bands
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = "#e94f50";
+        ctx.beginPath();
+        ctx.moveTo(x - 21, y - 19);
+        ctx.lineTo(stone.x, stone.y);
+        ctx.moveTo(x + 21, y - 19);
+        ctx.lineTo(stone.x, stone.y);
+        ctx.stroke();
+
+        if (dragging) drawAimGuide(stone);
+      }
+
+      function drawAimGuide(stone) {
+        const dx = anchor.x - stone.x;
+        const dy = anchor.y - stone.y;
+        const vx = dx * launchFactor;
+        const vy = dy * launchFactor;
+        const gravity = 640;
+
+        ctx.save();
+        ctx.setLineDash([4, 7]);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgba(35, 91, 120, .65)";
+        ctx.beginPath();
+        for (let i = 0; i <= 22; i++) {
+          const t = i * .055;
+          const px = stone.x + vx * t;
+          const py = stone.y + vy * t + .5 * gravity * t * t;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+          if (px < 0 || px > w || py > groundY) break;
+        }
+        ctx.stroke();
+        ctx.restore();
+
+        const power = Math.min(100, Math.round(Math.hypot(dx, dy) / maxPull * 100));
+        ctx.fillStyle = "#21495c";
+        ctx.font = "700 12px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("POWER " + power + "%", anchor.x, anchor.y + 43);
+
+        // Small power bar
+        const barW = 70, barX = anchor.x - barW / 2, barY = anchor.y + 49;
+        ctx.fillStyle = "rgba(255,255,255,.75)";
+        roundedRect(barX, barY, barW, 7, 4);
+        ctx.fill();
+        ctx.fillStyle = power > 75 ? "#ef7047" : "#f4b437";
+        roundedRect(barX, barY, barW * power / 100, 7, 4);
+        ctx.fill();
+      }
+
+      function drawStone(x, y, radius) {
+        const gradient = ctx.createRadialGradient(x - 4, y - 5, 2, x, y, radius + 2);
+        gradient.addColorStop(0, "#b9c4c7");
+        gradient.addColorStop(1, "#586c73");
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(33,54,62,.45)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.fillStyle = "rgba(255,255,255,.45)";
+        ctx.beginPath();
+        ctx.arc(x - radius * .3, y - radius * .35, radius * .2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function drawBabool(target, time) {
+        if (!target.alive) return;
+        const { x, y, r } = target;
+        const sway = Math.sin(time * .002 + target.wobble) * 1.4;
+
+        // Shadow
+        ctx.fillStyle = "rgba(36, 76, 46, .18)";
+        ctx.beginPath();
+        ctx.ellipse(x, y + 2, r * 1.08, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Trunk
+        ctx.fillStyle = "#8b5a36";
+        ctx.beginPath();
+        ctx.moveTo(x - r * .19, y);
+        ctx.lineTo(x - r * .13, y - r * .9);
+        ctx.lineTo(x + r * .15, y - r * .9);
+        ctx.lineTo(x + r * .2, y);
+        ctx.closePath();
+        ctx.fill();
+
+        // Branches
+        ctx.strokeStyle = "#79502f";
+        ctx.lineWidth = Math.max(2, r * .12);
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(x, y - r * .42);
+        ctx.lineTo(x - r * .68, y - r * .8);
+        ctx.moveTo(x + r * .02, y - r * .55);
+        ctx.lineTo(x + r * .66, y - r * .88);
+        ctx.stroke();
+
+        // Acacia canopy
+        ctx.fillStyle = "#388d48";
+        ctx.beginPath();
+        ctx.ellipse(x + sway, y - r * .96, r * .92, r * .43, 0, 0, Math.PI * 2);
+        ctx.ellipse(x - r * .48 + sway, y - r * .89, r * .47, r * .3, 0, 0, Math.PI * 2);
+        ctx.ellipse(x + r * .5 + sway, y - r * .9, r * .48, r * .3, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#64b957";
+        ctx.beginPath();
+        ctx.ellipse(x - r * .15 + sway, y - r * 1.07, r * .45, r * .18, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Thorns and a small target mark
+        ctx.strokeStyle = "#e7d890";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x - r * .75, y - r * .76);
+        ctx.lineTo(x - r * .91, y - r * .9);
+        ctx.moveTo(x + r * .7, y - r * .83);
+        ctx.lineTo(x + r * .88, y - r * .98);
+        ctx.stroke();
+
+        ctx.fillStyle = "#ffcf5a";
+        ctx.beginPath();
+        ctx.arc(x, y - r * .91, Math.max(3, r * .12), 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function spawnHitParticles(x, y) {
+        const colors = ["#ffd34e", "#ff8e52", "#78c965", "#fff4b0"];
+        for (let i = 0; i < 13; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 55 + Math.random() * 145;
+          particles.push({
+            x, y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed - 35,
+            life: .65 + Math.random() * .35,
+            maxLife: .9,
+            size: 3 + Math.random() * 4,
+            color: colors[i % colors.length]
+          });
+        }
+      }
+
+      function update(dt) {
+        if (projectile && projectile.state === "flying") {
+          projectile.vy += 640 * dt;
+          projectile.x += projectile.vx * dt;
+          projectile.y += projectile.vy * dt;
+
+          for (const target of targets) {
+            if (!target.alive) continue;
+            const centerY = target.y - target.r * .85;
+            const hitRadius = target.r * .88 + stoneRadius;
+            if (Math.hypot(projectile.x - target.x, projectile.y - centerY) < hitRadius) {
+              target.alive = false;
+              score += 100;
+              scoreEl.textContent = score;
+              spawnHitParticles(target.x, centerY);
+              projectile.state = "spent";
+              hintEl.textContent = "+100! Take another shot";
+              break;
+            }
+          }
+
+          if (projectile.y + stoneRadius >= groundY || projectile.x > w + 35 ||
+              projectile.x < -35 || projectile.y > h + 30) {
+            projectile.state = "spent";
+          }
+
+          if (projectile.state === "spent") {
+            if (targets.every(target => !target.alive)) {
+              finished = true;
+              finalScoreEl.textContent = score;
+              finishEl.classList.add("show");
+            } else {
+              projectile = { x: anchor.x, y: anchor.y, vx: 0, vy: 0, state: "ready" };
+              hintEl.textContent = "Drag the stone back to aim";
+            }
+          }
+        }
+
+        for (const p of particles) {
+          p.life -= dt;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.vy += 240 * dt;
+        }
+        particles = particles.filter(p => p.life > 0);
+      }
+
+      function draw(time) {
+        drawBackground(time);
+
+        for (const target of targets) drawBabool(target, time);
+
+        // Slingshot is on top of scenery.
+        drawSlingshot();
+
+        // Projectile in flight; ready projectile is drawn at the band.
+        if (projectile && projectile.state === "flying") {
+          drawStone(projectile.x, projectile.y, stoneRadius);
+        } else if (projectile && projectile.state === "ready") {
+          drawStone(projectile.x, projectile.y, stoneRadius);
+        }
+
+        for (const p of particles) {
+          ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      function frame(time) {
+        const dt = Math.min((time - lastTime) / 1000 || 0, .033);
+        lastTime = time;
+        update(dt);
+        draw(time);
+        requestAnimationFrame(frame);
+      }
+
+      resize();
+      resetGame();
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>
